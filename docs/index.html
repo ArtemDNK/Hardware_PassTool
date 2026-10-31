@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'">
+<title>Hardware PassTool</title>
+<style>
+:root{--bg:#f6f6f4;--card:#fff;--fg:#1d1d1b;--mut:#6b6a66;--bd:#dddcd6;--acc:#2a6fdb;--bad:#c0392b;--ok:#2e7d32}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#22221f;--fg:#eceae4;--mut:#9c9a92;--bd:#3a3935;--acc:#5b9cff;--bad:#ff6b5e;--ok:#6fcf73}}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:760px;margin:0 auto;padding:16px}
+h1{font-size:20px;font-weight:600;margin:4px 0 12px}
+h2{font-size:16px;font-weight:600;margin:0 0 10px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,.btn{font:inherit;border:1px solid var(--bd);background:var(--card);color:var(--fg);border-radius:8px;padding:7px 12px;cursor:pointer}
+button.p{background:var(--acc);border-color:var(--acc);color:#fff}
+button.d{color:var(--bad)}
+button:disabled{opacity:.45;cursor:default}
+input[type=text],input[type=password],input[type=search]{font:inherit;padding:7px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--fg);flex:1;min-width:140px}
+.mut{color:var(--mut);font-size:13px}
+#status{font-weight:500}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--mut);margin-right:6px}
+.dot.on{background:var(--ok)}.dot.lk{background:#e0a400}
+table{width:100%;border-collapse:collapse}
+td{padding:8px 4px;border-top:1px solid var(--bd);vertical-align:top;word-break:break-word}
+td.a{white-space:nowrap;text-align:right}
+td.a button{padding:4px 8px;font-size:13px}
+.pw{font-family:ui-monospace,Consolas,monospace;background:var(--bg);border:1px dashed var(--bd);border-radius:6px;padding:2px 6px;margin-top:4px;display:inline-block}
+#toast{position:sticky;bottom:12px;margin-top:12px;padding:10px 14px;border-radius:10px;background:var(--fg);color:var(--bg);display:none}
+label.ck{display:flex;gap:6px;align-items:center;font-size:14px}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<main>
+<h1>Hardware PassTool</h1>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <div id="status"><span class="dot" id="dot"></span>Не подключено</div>
+    <div class="row">
+      <button class="p" id="bConnect">Подключить</button>
+      <button id="bUsb" title="Для Android и браузеров без Web Serial">через WebUSB</button>
+      <button id="bDisc" class="hide">Отключить</button>
+    </div>
+  </div>
+  <p class="mut" id="hint" style="margin:8px 0 0">Подключите устройство в рабочем режиме и разблокируйте его PIN-ом. Нужен Chrome/Edge; на Android — Chrome и OTG-переходник.</p>
+</div>
+
+<div id="app" class="hide">
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <h2 style="margin:0">Записи <span class="mut" id="count"></span></h2>
+      <div class="row"><button id="bRefresh">Обновить</button><button id="bLock">Заблокировать</button></div>
+    </div>
+    <input type="search" id="q" placeholder="Поиск" style="width:100%;margin-bottom:6px">
+    <table id="tbl"><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Добавить / изменить</h2>
+    <div class="row" style="margin-bottom:8px">
+      <input type="text" id="fName" placeholder="Название (напр. GitHub)" autocomplete="off">
+      <input type="text" id="fLogin" placeholder="Логин" autocomplete="off">
+    </div>
+    <div class="row">
+      <input type="password" id="fPass" placeholder="Пароль" autocomplete="new-password">
+      <label class="ck"><input type="checkbox" id="fGen"> сгенерировать на устройстве</label>
+      <button class="p" id="bAdd">Сохранить</button>
+    </div>
+    <p class="mut" style="margin:8px 0 0">Устройство печатает только латиницу, цифры и символы ASCII. Если запись с таким именем есть — перезапись надо подтвердить на устройстве.</p>
+  </div>
+
+  <div class="card">
+    <h2>Импорт и резервная копия</h2>
+    <div class="row">
+      <label class="btn">Импорт CSV<input type="file" id="fCsv" accept=".csv,text/csv" class="hide"></label>
+      <button id="bBackup">Скачать бэкап</button>
+      <label class="btn">Восстановить из бэкапа<input type="file" id="fRestore" accept=".bin" class="hide"></label>
+    </div>
+    <p class="mut" style="margin:8px 0 0">CSV: экспорт Chrome / Edge / Яндекс.Браузера, Firefox, Bitwarden, KeePassXC. Бэкап — файл vault.bin, зашифрованный PIN-ом.</p>
+  </div>
+</div>
+
+<div id="toast"></div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const enc = new TextEncoder();
+const ERR = {locked:"Устройство заблокировано — введите PIN на нём", denied:"Отклонено на устройстве",
+  not_found:"Запись не найдена", bad_file:"Файл не похож на хранилище", empty_name:"Пустое имя",
+  too_long:"Слишком большой запрос", unknown_cmd:"Устройство не знает команду — обновите прошивку"};
+const CONFIRM_TIMEOUT = 90000;
+
+/* ---------- транспорт: Web Serial ---------- */
+class SerialTransport {
+  async open() {
+    this.port = await navigator.serial.requestPort({});
+    await this.port.open({baudRate: 115200});
+    try { await this.port.setSignals({dataTerminalReady: true}); } catch (e) {}
+    this.writer = this.port.writable.getWriter();
+    this.reader = this.port.readable.getReader();
+    this._loop();
+  }
+  async _loop() {
+    try { for (;;) { const {value, done} = await this.reader.read(); if (done) break; if (value) this.onData(value); } }
+    catch (e) {}
+    this.onClose && this.onClose();
+  }
+  async write(b) { await this.writer.write(b); }
+  async close() {
+    try { await this.reader.cancel(); } catch (e) {}
+    try { this.reader.releaseLock(); this.writer.releaseLock(); await this.port.close(); } catch (e) {}
+  }
+}
+
+/* ---------- транспорт: WebUSB (CDC-ACM вручную; для Android) ---------- */
+class UsbTransport {
+  async open() {
+    const d = this.dev = await navigator.usb.requestDevice({filters: []});
+    await d.open();
+    if (!d.configuration) await d.selectConfiguration(1);
+    const ifs = d.configuration.interfaces;
+    const datas = ifs.filter(i => i.alternates[0].interfaceClass === 0x0A);
+    if (!datas.length) throw new Error("у устройства нет COM-порта (оно в режиме обслуживания?)");
+    const data = datas[datas.length - 1];                // последний CDC = канал данных
+    const comm = ifs.find(i => i.interfaceNumber === data.interfaceNumber - 1 && i.alternates[0].interfaceClass === 0x02);
+    if (comm) { try { await d.claimInterface(comm.interfaceNumber); } catch (e) {} }
+    await d.claimInterface(data.interfaceNumber);
+    const eps = data.alternates[0].endpoints;
+    this.epIn = eps.find(e => e.direction === "in").endpointNumber;
+    this.epOut = eps.find(e => e.direction === "out").endpointNumber;
+    if (comm) {
+      try { await d.controlTransferOut({requestType: "class", recipient: "interface", request: 0x22, value: 0x01, index: comm.interfaceNumber}); } catch (e) {}
+    }
+    this.alive = true;
+    this._loop();
+  }
+  async _loop() {
+    while (this.alive) {
+      try {
+        const r = await this.dev.transferIn(this.epIn, 512);
+        if (r.data && r.data.byteLength) this.onData(new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength));
+      } catch (e) { break; }
+    }
+    this.alive = false;
+    this.onClose && this.onClose();
+  }
+  async write(b) { for (let i = 0; i < b.length; i += 64) await this.dev.transferOut(this.epOut, b.slice(i, i + 64)); }
+  async close() { this.alive = false; try { await this.dev.close(); } catch (e) {} }
+}
+
+/* ---------- протокол ---------- */
+class Device {
+  constructor(t) {
+    this.t = t; this.id = 0; this.wait = new Map(); this.buf = "";
+    this.dec = new TextDecoder();
+    t.onData = b => this._data(b);
+    t.onClose = () => { for (const w of this.wait.values()) w.reject(new Error("соединение потеряно")); this.wait.clear(); onDisconnected(); };
+  }
+  _data(b) {
+    this.buf += this.dec.decode(b, {stream: true});
+    let i;
+    while ((i = this.buf.indexOf("\n")) >= 0) {
+      const line = this.buf.slice(0, i).trim(); this.buf = this.buf.slice(i + 1);
+      let r; try { r = JSON.parse(line); } catch (e) { continue; }
+      const w = r && this.wait.get(r.id);
+      if (!w) continue;
+      this.wait.delete(r.id); clearTimeout(w.timer);
+      r.ok ? w.resolve(r) : w.reject(new Error(ERR[r.err] || r.err));
+    }
+  }
+  call(cmd, args = {}, timeout = 5000) {
+    const id = ++this.id;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.wait.delete(id); reject(new Error("нет ответа от устройства")); }, timeout);
+      this.wait.set(id, {resolve, reject, timer});
+      this.t.write(enc.encode(JSON.stringify(Object.assign({}, args, {cmd, id})) + "\n")).catch(reject);
+    });
+  }
+}
+
+/* ---------- CSV ---------- */
+function parseCsv(text) {
+  text = text.replace(/^﻿/, "");
+  const rows = []; let row = [], f = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true;
+    else if (c === ",") { row.push(f); f = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i++; row.push(f); rows.push(row); row = []; f = ""; }
+    else f += c;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  const head = (rows.shift() || []).map(h => h.trim().toLowerCase());
+  return rows.filter(r => r.some(x => x)).map(r => Object.fromEntries(head.map((h, i) => [h, r[i] || ""])));
+}
+const pick = (r, keys) => { for (const k of keys) if (r[k]) return r[k]; return ""; };
+function csvEntries(text) {
+  const out = [];
+  for (const r of parseCsv(text)) {
+    const password = pick(r, ["password", "login_password", "pass", "пароль"]);
+    if (!password) continue;
+    let name = pick(r, ["name", "title", "название"]).trim();
+    const url = pick(r, ["url", "login_uri", "uri", "website", "origin_url"]).trim();
+    if (!name && url) { try { name = new URL(url.includes("://") ? url : "https://" + url).hostname; } catch (e) { name = url; } }
+    name = name.replace(/^www\./, "");
+    if (!name) continue;
+    out.push({name, login: pick(r, ["username", "login_username", "login", "user", "email", "логин"]).trim(), password});
+  }
+  const cnt = {}; out.forEach(e => cnt[e.name] = (cnt[e.name] || 0) + 1);
+  out.forEach(e => { if (cnt[e.name] > 1 && e.login) e.name = `${e.name} (${e.login})`; });
+  return out;
+}
+const nonAscii = s => /[^\x20-\x7e]/.test(s);
+
+/* ---------- UI ---------- */
+let dev = null, entries = [];
+function toast(msg, ms = 3500) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.t); if (ms) toast.t = setTimeout(() => t.style.display = "none", ms);
+}
+function setStatus(text, cls) { $("status").innerHTML = `<span class="dot ${cls || ""}"></span>`; $("status").append(text); }
+async function guarded(fn, confirmMsg) {
+  try { if (confirmMsg) toast(confirmMsg, 0); await fn(); }
+  catch (e) { toast("Ошибка: " + e.message, 6000); }
+}
+
+async function connect(useUsb) {
+  const T = window.PassToolTestTransport || (useUsb || !navigator.serial ? UsbTransport : SerialTransport);
+  if (!window.PassToolTestTransport && T === UsbTransport && !navigator.usb) { toast("Браузер не поддерживает ни Web Serial, ни WebUSB. Нужен Chrome или Edge.", 8000); return; }
+  const t = new T();
+  try { await t.open(); } catch (e) { if (e.name !== "NotFoundError") toast("Не удалось открыть: " + e.message, 8000); return; }
+  dev = new Device(t);
+  try {
+    const st = await dev.call("status", {}, 2500);
+    if (st.device !== "passtool") throw new Error("это не PassTool");
+    $("bConnect").classList.add("hide"); $("bUsb").classList.add("hide"); $("bDisc").classList.remove("hide"); $("hint").classList.add("hide");
+    await refresh(st);
+  } catch (e) { toast("Устройство не ответило: " + e.message + ". Проверьте, что выбран нужный порт и устройство в рабочем режиме.", 8000); await t.close(); dev = null; }
+}
+function onDisconnected() {
+  dev = null; entries = [];
+  setStatus("Не подключено");
+  $("app").classList.add("hide"); $("bDisc").classList.add("hide");
+  $("bConnect").classList.remove("hide"); $("bUsb").classList.remove("hide"); $("hint").classList.remove("hide");
+}
+async function refresh(st) {
+  st = st || await dev.call("status");
+  if (!st.unlocked) {
+    setStatus("Подключено, заблокировано — введите PIN на устройстве", "lk");
+    $("app").classList.add("hide");
+    clearTimeout(refresh.t); refresh.t = setTimeout(() => dev && guarded(() => refresh()), 3000);
+    return;
+  }
+  setStatus("Подключено, разблокировано", "on");
+  entries = (await dev.call("list")).entries;
+  $("app").classList.remove("hide");
+  render();
+}
+function render() {
+  const q = $("q").value.trim().toLowerCase();
+  const tb = $("tbl").tBodies[0]; tb.innerHTML = "";
+  $("count").textContent = `(${entries.length})`;
+  for (const e of entries) {
+    if (q && !(e.name + " " + e.login).toLowerCase().includes(q)) continue;
+    const tr = tb.insertRow();
+    const c1 = tr.insertCell(); const b = document.createElement("div"); b.textContent = e.name; b.style.fontWeight = 500;
+    const l = document.createElement("div"); l.className = "mut"; l.textContent = e.login;
+    c1.append(b, l);
+    const c2 = tr.insertCell(); c2.className = "a";
+    const bs = document.createElement("button"); bs.textContent = "Показать";
+    bs.onclick = () => guarded(() => reveal(e, c1), "Подтвердите на устройстве…");
+    const bd = document.createElement("button"); bd.textContent = "Удалить"; bd.className = "d";
+    bd.onclick = () => guarded(async () => { await dev.call("delete", {name: e.name}, CONFIRM_TIMEOUT); toast("Удалено"); await refresh(); }, "Подтвердите удаление на устройстве…");
+    c2.append(bs, " ", bd);
+  }
+  if (!tb.rows.length) { const td = tb.insertRow().insertCell(); td.className = "mut"; td.textContent = entries.length ? "Ничего не найдено" : "Записей пока нет"; }
+}
+async function reveal(e, cell) {
+  const r = await dev.call("reveal", {name: e.name}, CONFIRM_TIMEOUT);
+  toast("Пароль будет скрыт через 30 с");
+  const box = document.createElement("div");
+  const pw = document.createElement("span"); pw.className = "pw"; pw.textContent = r.password;
+  const cp = document.createElement("button"); cp.textContent = "Копировать"; cp.style.marginLeft = "6px"; cp.style.fontSize = "13px"; cp.style.padding = "2px 8px";
+  cp.onclick = async () => { try { await navigator.clipboard.writeText(r.password); toast("Скопировано"); } catch (x) { toast("Буфер обмена недоступен"); } };
+  box.append(pw, cp); cell.append(box);
+  setTimeout(() => box.remove(), 30000);
+}
+async function put(list) {
+  const r = await dev.call("put", {entries: list}, CONFIRM_TIMEOUT);
+  return r;
+}
+
+$("bConnect").onclick = () => connect(false);
+$("bUsb").onclick = () => connect(true);
+$("bDisc").onclick = async () => { if (dev) await dev.t.close(); onDisconnected(); };
+$("bRefresh").onclick = () => guarded(() => refresh());
+$("bLock").onclick = () => guarded(async () => { await dev.call("lock"); toast("Заблокировано"); setTimeout(() => guarded(() => refresh()), 500); });
+$("q").oninput = render;
+$("fGen").onchange = () => { $("fPass").disabled = $("fGen").checked; };
+$("bAdd").onclick = () => guarded(async () => {
+  const name = $("fName").value.trim(), login = $("fLogin").value.trim(), pw = $("fPass").value, gen = $("fGen").checked;
+  if (!name) throw new Error("введите название");
+  if (!gen && !pw) throw new Error("введите пароль или включите генерацию");
+  if (nonAscii(login) || (!gen && nonAscii(pw))) toast("Внимание: не-ASCII символы устройство не напечатает", 4000);
+  const item = gen ? {name, login, gen: true} : {name, login, password: pw};
+  if (entries.some(e => e.name === name)) toast("Подтвердите перезапись на устройстве…", 0);
+  const r = await put([item]);
+  $("fName").value = $("fLogin").value = $("fPass").value = "";
+  $("fGen").checked = false; $("fPass").disabled = false;
+  toast(r.updated ? "Запись обновлена" : "Запись добавлена");
+  await refresh();
+});
+$("fCsv").onchange = ev => guarded(async () => {
+  const f = ev.target.files[0]; ev.target.value = ""; if (!f) return;
+  const list = csvEntries(await f.text());
+  if (!list.length) throw new Error("в файле нет записей с паролями");
+  const bad = list.filter(e => nonAscii(e.password) || nonAscii(e.login)).length;
+  if (!confirm(`Импортировать ${list.length} записей?` + (bad ? `\n${bad} содержат не-ASCII символы (не напечатаются).` : ""))) return;
+  let a = 0, u = 0;
+  for (let i = 0; i < list.length; i += 10) {
+    toast(`Импорт ${Math.min(i + 10, list.length)}/${list.length}… (перезапись подтверждается на устройстве)`, 0);
+    const r = await put(list.slice(i, i + 10)); a += r.added; u += r.updated;
+  }
+  toast(`Готово: новых ${a}, обновлено ${u}. Удалите CSV — пароли в нём открытым текстом!`, 8000);
+  await refresh();
+});
+$("bBackup").onclick = () => guarded(async () => {
+  const r = await dev.call("backup", {}, CONFIRM_TIMEOUT);
+  const bin = Uint8Array.from(atob(r.data), c => c.charCodeAt(0));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([bin], {type: "application/octet-stream"}));
+  a.download = "vault-" + new Date().toISOString().slice(0, 10) + ".bin";
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast("Бэкап сохранён (зашифрован PIN-ом)");
+}, "Подтвердите на устройстве…");
+$("fRestore").onchange = ev => guarded(async () => {
+  const f = ev.target.files[0]; ev.target.value = ""; if (!f) return;
+  const bin = new Uint8Array(await f.arrayBuffer());
+  if (String.fromCharCode(...bin.slice(0, 4)) !== "DPV1") throw new Error("это не файл хранилища PassTool");
+  if (!confirm("Заменить хранилище на устройстве этой копией? Текущие записи пропадут.")) return;
+  let s = ""; for (let i = 0; i < bin.length; i += 8192) s += String.fromCharCode(...bin.subarray(i, i + 8192));
+  toast("Подтвердите замену на устройстве…", 0);
+  await dev.call("restore", {data: btoa(s)}, CONFIRM_TIMEOUT);
+  toast("Хранилище заменено. Введите на устройстве PIN от этой копии.", 8000);
+  await refresh();
+});
+if (!navigator.serial && !navigator.usb) $("hint").textContent = "Этот браузер не умеет работать с USB. Откройте страницу в Chrome или Edge (на Android — Chrome).";
+</script>
+</body>
+</html>
