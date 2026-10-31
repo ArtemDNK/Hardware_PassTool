@@ -14,7 +14,8 @@ DIY аппаратный менеджер паролей на RP2040 — ана�
 - AES-256-CBC + HMAC-SHA256, ключ из PIN через PBKDF2-HMAC-SHA256
 - 10 неверных PIN подряд — хранилище стирается; растущая задержка между попытками
 - Автоблокировка, гашение экрана
-- Генерация паролей на самом устройстве
+- Генератор паролей в утилите для ПК и в веб-приложении: длина, наборы символов, свои спецсимволы,
+  исключение похожих символов (а также генерация на самом устройстве)
 - Управление по USB: список, добавление, удаление, просмотр пароля, импорт CSV из браузеров/Bitwarden/KeePassXC, бэкап/восстановление
 - Всё, что раскрывает секреты или удаляет данные, **подтверждается на устройстве**
 
@@ -70,7 +71,12 @@ pip install -r pc/requirements.txt
 python pc/passtool.py status
 python pc/passtool.py list
 python pc/passtool.py add GitHub artem@example.com      # пароль спросит
-python pc/passtool.py add Steam mylogin --gen           # пароль сгенерирует устройство
+python pc/passtool.py add Steam mylogin --gen           # сгенерировать пароль (20 символов, a-z A-Z 0-9 спецсимволы)
+python pc/passtool.py add Bank me --gen -n 32 -c lud --show   # 32 символа без спецсимволов и показать
+python pc/passtool.py add Wifi home --gen -c ld --no-ambiguous
+python pc/passtool.py add Site me --gen -s "!#%-_"      # свой набор спецсимволов
+python pc/passtool.py add Old me --gen-device           # сгенерировать на устройстве
+python pc/passtool.py gen -n 16 --count 5               # просто сгенерировать, без устройства
 python pc/passtool.py show GitHub                       # нужно подтвердить на устройстве
 python pc/passtool.py rm GitHub                         # нужно подтвердить на устройстве
 python pc/passtool.py import-csv passwords.csv          # экспорт Chrome/Edge/Яндекс/Firefox/Bitwarden/KeePassXC
@@ -82,9 +88,23 @@ python pc/passtool.py lock
 
 Порт ищется автоматически; можно указать вручную: `--port COM5` или `--port /dev/ttyACM0`.
 
+Параметры генератора (`add --gen` и `gen`):
+
+| Ключ | Что делает |
+|------|------------|
+| `-n`, `--length` | длина, по умолчанию 20 (до 128) |
+| `-c`, `--charset` | группы: `l` — a-z, `u` — A-Z, `d` — 0-9, `s` — спецсимволы; по умолчанию `luds` |
+| `-s`, `--symbols` | свой набор спецсимволов (печатные ASCII), по умолчанию `!@#$%^&*-_=+?.,:;()[]{}~` |
+| `--no-ambiguous` | без похожих символов `I l 1 \| O 0 o ` ' "` |
+
+В пароле всегда есть хотя бы один символ из каждой выбранной группы. Используется `secrets`
+(в браузере — `crypto.getRandomValues`), без смещения распределения.
+
 ## Управление из браузера (ПК и Android) — `docs/index.html`
 
-Одна страница без зависимостей, работает в Chrome / Edge:
+Одна страница без зависимостей, работает в Chrome / Edge. В форме добавления есть кнопка
+«Сгенерировать» и настройки генератора (длина, a-z / A-Z / 0-9 / спецсимволы, свой набор
+спецсимволов, без похожих символов); настройки запоминаются в браузере.
 
 - **ПК** — кнопка «Подключить» (Web Serial).
 - **Android** — Chrome + OTG-переходник, кнопка «через WebUSB».

@@ -8,7 +8,11 @@
     python passtool.py status
     python passtool.py list
     python passtool.py add GitHub artem@example.com          # пароль спросит
-    python passtool.py add Steam mylogin --gen               # сгенерирует устройство
+    python passtool.py add Steam mylogin --gen               # сгенерировать пароль (20 символов, a-z A-Z 0-9 !@#...)
+    python passtool.py add Bank me --gen -n 32 -c lud --show # 32 символа без спецсимволов, показать
+    python passtool.py add Wifi home --gen -c ld --no-ambiguous
+    python passtool.py add Site me --gen -s "!#%-_"          # свой набор спецсимволов
+    python passtool.py gen -n 16 --count 5                   # просто сгенерировать (без устройства)
     python passtool.py show GitHub
     python passtool.py rm GitHub
     python passtool.py import-csv chrome_passwords.csv
@@ -20,6 +24,7 @@ import base64
 import csv
 import getpass
 import json
+import secrets
 import sys
 import time
 from urllib.parse import urlparse
@@ -111,6 +116,58 @@ def find_device(port=None):
     raise DeviceError("ни один порт не ответил как PassTool (проверены: %s)" % ", ".join(ports))
 
 
+# ---------------- генератор паролей ----------------
+CHARSETS = {
+    "l": ("строчные a-z", "abcdefghijklmnopqrstuvwxyz"),
+    "u": ("прописные A-Z", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+    "d": ("цифры 0-9", "0123456789"),
+    "s": ("спецсимволы", "!@#$%^&*-_=+?.,:;()[]{}~"),
+}
+AMBIGUOUS = set("Il1|O0o`'\"")
+
+
+def generate_password(length=20, charset="luds", symbols=None, no_ambiguous=False):
+    """Криптостойкий пароль. В пароле будет хотя бы один символ из каждой выбранной группы."""
+    groups = []
+    for k in dict.fromkeys(charset):
+        if k not in CHARSETS:
+            raise ValueError("неизвестная группа '%s' (допустимо: l, u, d, s)" % k)
+        chars = symbols if (k == "s" and symbols) else CHARSETS[k][1]
+        if any(ord(c) < 33 or ord(c) > 126 for c in chars):
+            raise ValueError("спецсимволы должны быть печатными ASCII без пробела")
+        if no_ambiguous:
+            chars = "".join(c for c in chars if c not in AMBIGUOUS)
+        chars = "".join(dict.fromkeys(chars))
+        if chars:
+            groups.append(chars)
+    if not groups:
+        raise ValueError("не выбрано ни одной группы символов")
+    if length < len(groups):
+        raise ValueError("длина меньше числа выбранных групп (%d)" % len(groups))
+    if length > 128:
+        raise ValueError("длина больше 128")
+    alphabet = "".join(dict.fromkeys("".join(groups)))
+    while True:
+        pw = "".join(secrets.choice(alphabet) for _ in range(length))
+        if all(any(c in g for c in pw) for g in groups):
+            return pw
+
+
+def gen_from_args(a):
+    try:
+        return generate_password(a.length, a.charset, a.symbols, a.no_ambiguous)
+    except ValueError as e:
+        raise DeviceError(str(e))
+
+
+def add_gen_args(s):
+    s.add_argument("-n", "--length", type=int, default=20, help="длина пароля (по умолчанию 20)")
+    s.add_argument("-c", "--charset", default="luds",
+                   help="группы символов: l — a-z, u — A-Z, d — 0-9, s — спецсимволы (по умолчанию luds)")
+    s.add_argument("-s", "--symbols", help="свой набор спецсимволов, например \"!#%%-_\"")
+    s.add_argument("--no-ambiguous", action="store_true", help="без похожих символов: I l 1 | O 0 o ` ' \"")
+
+
 # ---------------- CSV ----------------
 NAME_KEYS = ("name", "title", "название")
 LOGIN_KEYS = ("username", "login_username", "login", "user", "email", "логин")
@@ -179,6 +236,10 @@ def cmd_list(dev, st, a):
 def cmd_add(dev, st, a):
     item = {"name": a.name, "login": a.login or ""}
     if a.gen:
+        item["password"] = gen_from_args(a)
+        if a.show:
+            print("Пароль: %s" % item["password"])
+    elif a.gen_device:
         item["gen"] = True
     else:
         pw = a.password or getpass.getpass("Пароль для %s: " % a.name)
@@ -190,6 +251,11 @@ def cmd_add(dev, st, a):
     print("Если запись уже есть — подтвердите перезапись на устройстве...")
     r = dev.call("put", timeout=CONFIRM_TIMEOUT, entries=[item])
     print("Готово (новых: %d, обновлено: %d)" % (r["added"], r["updated"]))
+
+
+def cmd_gen(dev, st, a):
+    for _ in range(a.count):
+        print(gen_from_args(a))
 
 
 def cmd_show(dev, st, a):
@@ -261,8 +327,15 @@ def main():
     s = sub.add_parser("add", help="добавить/изменить запись")
     s.add_argument("name")
     s.add_argument("login", nargs="?", default="")
-    s.add_argument("--gen", action="store_true", help="сгенерировать пароль на устройстве")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--gen", action="store_true", help="сгенерировать пароль на ПК (см. -n, -c, -s)")
+    g.add_argument("--gen-device", action="store_true", help="сгенерировать пароль на устройстве")
+    add_gen_args(s)
+    s.add_argument("--show", action="store_true", help="показать сгенерированный пароль")
     s.add_argument("--password", help="пароль (небезопасно: останется в истории shell)")
+    s = sub.add_parser("gen", help="сгенерировать пароль без устройства")
+    add_gen_args(s)
+    s.add_argument("--count", type=int, default=1, help="сколько паролей")
     s = sub.add_parser("show", help="показать пароль (с подтверждением)")
     s.add_argument("name")
     s = sub.add_parser("rm", help="удалить запись (с подтверждением)")
@@ -280,6 +353,12 @@ def main():
 
     if a.cmd == "import-csv" and a.dry_run:
         cmd_import_csv(None, None, a)
+        return
+    if a.cmd == "gen":
+        try:
+            cmd_gen(None, None, a)
+        except DeviceError as e:
+            sys.exit("Ошибка: %s" % e)
         return
     try:
         dev, st = find_device(a.port)

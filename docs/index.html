@@ -32,6 +32,13 @@ td.a button{padding:4px 8px;font-size:13px}
 .pw{font-family:ui-monospace,Consolas,monospace;background:var(--bg);border:1px dashed var(--bd);border-radius:6px;padding:2px 6px;margin-top:4px;display:inline-block}
 #toast{position:sticky;bottom:12px;margin-top:12px;padding:10px 14px;border-radius:10px;background:var(--fg);color:var(--bg);display:none}
 label.ck{display:flex;gap:6px;align-items:center;font-size:14px}
+.gen{border:1px solid var(--bd);border-radius:10px;padding:10px 12px;margin-top:10px}
+.gen summary{cursor:pointer;font-weight:500}
+.gen .row{margin-top:8px}
+input[type=number]{font:inherit;width:72px;padding:6px 8px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--fg)}
+input[type=range]{flex:1;min-width:120px}
+#fPass{font-family:ui-monospace,Consolas,monospace}
+#genErr{color:var(--bad);font-size:13px;margin-top:6px}
 .hide{display:none!important}
 </style>
 </head>
@@ -69,9 +76,32 @@ label.ck{display:flex;gap:6px;align-items:center;font-size:14px}
     </div>
     <div class="row">
       <input type="password" id="fPass" placeholder="Пароль" autocomplete="new-password">
-      <label class="ck"><input type="checkbox" id="fGen"> сгенерировать на устройстве</label>
+      <button id="bEye" title="Показать/скрыть">👁</button>
+      <button id="bGen">Сгенерировать</button>
       <button class="p" id="bAdd">Сохранить</button>
     </div>
+    <details class="gen" id="genBox">
+      <summary>Настройки генератора</summary>
+      <div class="row">
+        <span>Длина</span>
+        <input type="range" id="gLenR" min="4" max="64" value="20">
+        <input type="number" id="gLen" min="4" max="128" value="20">
+      </div>
+      <div class="row">
+        <label class="ck"><input type="checkbox" id="gL" checked> a-z</label>
+        <label class="ck"><input type="checkbox" id="gU" checked> A-Z</label>
+        <label class="ck"><input type="checkbox" id="gD" checked> 0-9</label>
+        <label class="ck"><input type="checkbox" id="gS" checked> спецсимволы</label>
+      </div>
+      <div class="row">
+        <input type="text" id="gSym" spellcheck="false" autocomplete="off" title="Какие спецсимволы использовать">
+        <button id="gSymReset" title="Набор по умолчанию">Сброс</button>
+      </div>
+      <div class="row">
+        <label class="ck"><input type="checkbox" id="gNoAmb"> без похожих символов (I l 1 | O 0 o ` ' ")</label>
+      </div>
+      <div id="genErr"></div>
+    </details>
     <p class="mut" style="margin:8px 0 0">Устройство печатает только латиницу, цифры и символы ASCII. Если запись с таким именем есть — перезапись надо подтвердить на устройстве.</p>
   </div>
 
@@ -221,6 +251,37 @@ function csvEntries(text) {
 }
 const nonAscii = s => /[^\x20-\x7e]/.test(s);
 
+/* ---------- генератор паролей (crypto.getRandomValues, без смещения) ---------- */
+const GEN_SETS = {l: "abcdefghijklmnopqrstuvwxyz", u: "ABCDEFGHIJKLMNOPQRSTUVWXYZ", d: "0123456789"};
+const GEN_SYMBOLS = "!@#$%^&*-_=+?.,:;()[]{}~";
+const AMBIGUOUS = new Set("Il1|O0o`'\"");
+function randInt(n) {
+  const lim = Math.floor(0x100000000 / n) * n, a = new Uint32Array(1);
+  for (;;) { crypto.getRandomValues(a); if (a[0] < lim) return a[0] % n; }
+}
+function generatePassword({length, lower, upper, digits, symbols, symbolSet, noAmbiguous}) {
+  const groups = [];
+  const add = chars => {
+    if (noAmbiguous) chars = [...chars].filter(c => !AMBIGUOUS.has(c)).join("");
+    chars = [...new Set(chars)].join("");
+    if (chars) groups.push(chars);
+  };
+  if (lower) add(GEN_SETS.l); if (upper) add(GEN_SETS.u); if (digits) add(GEN_SETS.d);
+  if (symbols) {
+    if (/[^\x21-\x7e]/.test(symbolSet)) throw new Error("спецсимволы — только печатные ASCII без пробела");
+    if (!symbolSet) throw new Error("набор спецсимволов пуст");
+    add(symbolSet);
+  }
+  if (!groups.length) throw new Error("выберите хотя бы одну группу символов");
+  if (!(length >= groups.length)) throw new Error(`длина должна быть не меньше ${groups.length}`);
+  if (length > 128) throw new Error("длина не больше 128");
+  const alphabet = [...new Set(groups.join(""))];
+  for (;;) {
+    let pw = ""; for (let i = 0; i < length; i++) pw += alphabet[randInt(alphabet.length)];
+    if (groups.every(g => [...pw].some(c => g.includes(c)))) return pw;
+  }
+}
+
 /* ---------- UI ---------- */
 let dev = null, entries = [];
 function toast(msg, ms = 3500) {
@@ -305,17 +366,51 @@ $("bDisc").onclick = async () => { if (dev) await dev.t.close(); onDisconnected(
 $("bRefresh").onclick = () => guarded(() => refresh());
 $("bLock").onclick = () => guarded(async () => { await dev.call("lock"); toast("Заблокировано"); setTimeout(() => guarded(() => refresh()), 500); });
 $("q").oninput = render;
-$("fGen").onchange = () => { $("fPass").disabled = $("fGen").checked; };
+/* настройки генератора: запоминаем в браузере */
+const GEN_IDS = ["gLen", "gL", "gU", "gD", "gS", "gSym", "gNoAmb"];
+function genOpts() {
+  return {length: parseInt($("gLen").value, 10), lower: $("gL").checked, upper: $("gU").checked,
+    digits: $("gD").checked, symbols: $("gS").checked, symbolSet: $("gSym").value, noAmbiguous: $("gNoAmb").checked};
+}
+function saveGen() {
+  const o = {}; GEN_IDS.forEach(id => { const el = $(id); o[id] = el.type === "checkbox" ? el.checked : el.value; });
+  try { localStorage.setItem("passtool-gen", JSON.stringify(o)); } catch (e) {}
+}
+function loadGen() {
+  $("gSym").value = GEN_SYMBOLS;
+  try {
+    const o = JSON.parse(localStorage.getItem("passtool-gen") || "{}");
+    GEN_IDS.forEach(id => { if (id in o) { const el = $(id); el.type === "checkbox" ? el.checked = o[id] : el.value = o[id]; } });
+  } catch (e) {}
+  $("gLenR").value = Math.min(64, $("gLen").value);
+  $("gSym").disabled = !$("gS").checked;
+}
+function doGen(quiet) {
+  try {
+    const pw = generatePassword(genOpts());
+    $("fPass").value = pw; $("fPass").type = "text"; $("genErr").textContent = "";
+    return pw;
+  } catch (e) { $("genErr").textContent = e.message; $("genBox").open = true; if (!quiet) toast("Генератор: " + e.message); }
+}
+$("gLenR").oninput = () => { $("gLen").value = $("gLenR").value; saveGen(); doGen(true); };
+$("gLen").oninput = () => { $("gLenR").value = Math.min(64, $("gLen").value || 4); saveGen(); doGen(true); };
+["gL", "gU", "gD", "gS", "gNoAmb", "gSym"].forEach(id => $(id).addEventListener("input", () => {
+  $("gSym").disabled = !$("gS").checked; saveGen(); doGen(true);
+}));
+$("gSymReset").onclick = () => { $("gSym").value = GEN_SYMBOLS; saveGen(); doGen(true); };
+$("bGen").onclick = () => doGen(false);
+$("bEye").onclick = () => { $("fPass").type = $("fPass").type === "password" ? "text" : "password"; };
+loadGen();
 $("bAdd").onclick = () => guarded(async () => {
-  const name = $("fName").value.trim(), login = $("fLogin").value.trim(), pw = $("fPass").value, gen = $("fGen").checked;
+  const name = $("fName").value.trim(), login = $("fLogin").value.trim(), pw = $("fPass").value;
   if (!name) throw new Error("введите название");
-  if (!gen && !pw) throw new Error("введите пароль или включите генерацию");
-  if (nonAscii(login) || (!gen && nonAscii(pw))) toast("Внимание: не-ASCII символы устройство не напечатает", 4000);
-  const item = gen ? {name, login, gen: true} : {name, login, password: pw};
+  if (!pw) throw new Error("введите пароль или нажмите «Сгенерировать»");
+  if (nonAscii(login) || nonAscii(pw)) toast("Внимание: не-ASCII символы устройство не напечатает", 4000);
+  const item = {name, login, password: pw};
   if (entries.some(e => e.name === name)) toast("Подтвердите перезапись на устройстве…", 0);
   const r = await put([item]);
   $("fName").value = $("fLogin").value = $("fPass").value = "";
-  $("fGen").checked = false; $("fPass").disabled = false;
+  $("fPass").type = "password";
   toast(r.updated ? "Запись обновлена" : "Запись добавлена");
   await refresh();
 });
