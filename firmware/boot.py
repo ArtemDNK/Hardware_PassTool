@@ -1,5 +1,5 @@
 # Выполняется при старте до code.py.
-# Кнопка джойстика зажата при подключении -> режим обслуживания:
+# Кнопка • (OK) зажата при подключении -> режим обслуживания:
 #   флешка CIRCUITPY видна на ПК, можно обновить код, положить import.txt, забрать vault.bin.
 # Иначе -> рабочий режим: флешка скрыта, код может писать в хранилище,
 #   включены USB-клавиатура и отдельный COM-порт для утилит управления.
@@ -11,7 +11,7 @@ import usb_cdc
 import usb_hid
 import config
 
-btn = digitalio.DigitalInOut(config.JOY_SW)
+btn = digitalio.DigitalInOut(config.BTN_OK)
 btn.switch_to_input(pull=digitalio.Pull.UP)
 time.sleep(0.05)
 maintenance = not btn.value

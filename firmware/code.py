@@ -1,10 +1,9 @@
 # Hardware PassTool — DIY аппаратный менеджер паролей на RP2040 (аналог Mooltipass Mini).
-# Экран SSD1306/SH1106 128x64 I2C + аналоговый джойстик с кнопкой.
+# Экран SSD1306/SH1106 128x64 I2C + три тактовые кнопки: ▲, ▼ и • (OK).
 # Устройство притворяется USB-клавиатурой и печатает логин/пароль,
 # а через отдельный COM-порт им можно управлять с ПК или телефона.
 import time
 import busio
-import analogio
 import digitalio
 import displayio
 import storage
@@ -47,7 +46,7 @@ FONT = bitmap_font.load_font(config.FONT_FILE)
 FONT.load_glyphs(
     " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
     "abcdefghijklmnopqrstuvwxyz{|}~"
-    "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя«»—→…"
+    "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя«»—→…•▲▼"
 )
 
 _group = displayio.Group()
@@ -118,7 +117,7 @@ def chunks(text, width=COLS):
     return [text[i:i + width] for i in range(0, len(text), width)] or [""]
 
 
-# ===================== Джойстик =====================
+# ===================== Кнопки =====================
 class Locked(Exception):
     pass
 
@@ -128,66 +127,79 @@ class Refresh(Exception):
     pass
 
 
-class Joystick:
+class Buttons:
+    """Три кнопки на землю (внутренняя подтяжка). События:
+    U / D   — нажатие ▲ / ▼ (при удержании — автоповтор)
+    OK      — короткое нажатие •
+    LONG    — удержание • (назад; в PIN — готово)
+    BOTH    — ▲ и ▼ вместе (блокировка; в PIN — стереть символ)
+    """
     LONG = 0.8
     REPEAT_DELAY = 0.45
     REPEAT_RATE = 0.12
+    DEBOUNCE = 0.02
 
     def __init__(self):
-        self.ax = analogio.AnalogIn(config.JOY_X)
-        self.ay = analogio.AnalogIn(config.JOY_Y)
-        self.sw = digitalio.DigitalInOut(config.JOY_SW)
-        self.sw.switch_to_input(pull=digitalio.Pull.UP)
-        self._dir = None
-        self._dir_t = 0
-        self._repeat = False
-        self._pressed = False
-        self._press_t = 0
-        self._long_sent = False
+        self.io = {}
+        for name, pin in (("U", config.BTN_UP), ("D", config.BTN_DOWN), ("OK", config.BTN_OK)):
+            b = digitalio.DigitalInOut(pin)
+            b.switch_to_input(pull=digitalio.Pull.UP)
+            self.io[name] = b
+        self.raw = {n: False for n in self.io}         # последнее сырое значение
+        self.raw_t = {n: 0.0 for n in self.io}         # когда оно поменялось
+        self.state = {n: False for n in self.io}       # состояние после антидребезга
+        self.ok_t = 0.0
+        self.long_sent = False
+        self.rep_t = 0.0
+        self.repeating = False
+        self.chord = False
 
-    def _direction(self):
-        dx = self.ax.value - 32768
-        dy = self.ay.value - 32768
-        if config.JOY_SWAP_XY:
-            dx, dy = dy, dx
-        if config.JOY_INVERT_X:
-            dx = -dx
-        if config.JOY_INVERT_Y:
-            dy = -dy
-        th = config.JOY_THRESHOLD
-        if abs(dx) < th and abs(dy) < th:
-            return None
-        if abs(dx) > abs(dy):
-            return "R" if dx > 0 else "L"
-        return "D" if dy > 0 else "U"
+    def _read(self, now):
+        cur = {}
+        for n, b in self.io.items():
+            v = not b.value
+            if v != self.raw[n]:
+                self.raw[n], self.raw_t[n] = v, now
+            cur[n] = self.raw[n] if now - self.raw_t[n] >= self.DEBOUNCE else self.state[n]
+        return cur
 
     def poll(self):
-        """Возвращает U/D/L/R/OK/LONG или None."""
         now = time.monotonic()
-        down = not self.sw.value
-        if down and not self._pressed:
-            self._pressed, self._press_t, self._long_sent = True, now, False
-        elif down and self._pressed:
-            if not self._long_sent and now - self._press_t >= self.LONG:
-                self._long_sent = True
-                return "LONG"
-        elif not down and self._pressed:
-            self._pressed = False
-            if not self._long_sent and now - self._press_t > 0.03:
-                return "OK"
-        d = self._direction()
-        if d != self._dir:
-            self._dir, self._dir_t, self._repeat = d, now, False
-            return d
-        if d in ("U", "D"):
-            wait = self.REPEAT_RATE if self._repeat else self.REPEAT_DELAY
-            if now - self._dir_t >= wait:
-                self._dir_t, self._repeat = now, True
-                return d
+        cur = self._read(now)
+        prev = self.state
+        self.state = cur
+        # ▲+▼ вместе
+        if cur["U"] and cur["D"]:
+            if not self.chord:
+                self.chord = True
+                return "BOTH"
+            return None
+        if self.chord:
+            if not cur["U"] and not cur["D"]:
+                self.chord = False
+            return None
+        # ▲ / ▼ с автоповтором
+        for n in ("U", "D"):
+            if cur[n] and not prev[n]:
+                self.rep_t, self.repeating = now, False
+                return n
+            if cur[n]:
+                wait = self.REPEAT_RATE if self.repeating else self.REPEAT_DELAY
+                if now - self.rep_t >= wait:
+                    self.rep_t, self.repeating = now, True
+                    return n
+        # • короткое / долгое
+        if cur["OK"] and not prev["OK"]:
+            self.ok_t, self.long_sent = now, False
+        elif cur["OK"] and not self.long_sent and now - self.ok_t >= self.LONG:
+            self.long_sent = True
+            return "LONG"
+        elif not cur["OK"] and prev["OK"] and not self.long_sent:
+            return "OK"
         return None
 
 
-joy = Joystick()
+buttons = Buttons()
 vault = Vault(config.KDF_ITERATIONS)
 _last_activity = time.monotonic()
 
@@ -197,7 +209,7 @@ def _gen():
 
 
 def wait_event(lock_screen=False):
-    """Ждёт событие джойстика, попутно обслуживает команды с ПК и автоблокировку."""
+    """Ждёт нажатие кнопки, попутно обслуживает команды с ПК и автоблокировку."""
     global _last_activity
     while True:
         if remote.poll():
@@ -209,7 +221,7 @@ def wait_event(lock_screen=False):
             if remote.changed:
                 remote.changed = False
                 raise Refresh()
-        ev = joy.poll()
+        ev = buttons.poll()
         now = time.monotonic()
         if ev:
             _last_activity = now
@@ -263,7 +275,7 @@ def message(lines):
         rows.append("")
     rows.append("         [OK]")
     screen(rows)
-    while wait_event() not in ("OK", "L", "R"):
+    while wait_event() not in ("OK", "LONG"):
         pass
 
 
@@ -277,14 +289,15 @@ def confirm(question):
         ev = wait_event()
         if ev in ("U", "D"):
             idx ^= 1
-        elif ev in ("OK", "R"):
+        elif ev == "OK":
             return idx == 0
-        elif ev == "L":
+        elif ev == "LONG":
             return False
 
 
 def menu(title, items, idx=0):
-    """Возвращает индекс выбранного пункта или None (назад). Удержание OK -> блокировка."""
+    """Возвращает индекс выбранного пункта или None (удержание • — назад).
+    ▲+▼ вместе — блокировка."""
     if not items:
         return None
     view = ROWS - 1
@@ -300,16 +313,16 @@ def menu(title, items, idx=0):
             idx -= 1
         elif ev == "D":
             idx += 1
-        elif ev in ("OK", "R"):
+        elif ev == "OK":
             return idx
-        elif ev == "L":
+        elif ev == "LONG":
             return None
-        elif ev == "LONG" and vault.unlocked:
+        elif ev == "BOTH" and vault.unlocked:
             raise Locked()
 
 
 def pin_entry(title, lock_screen=True):
-    """Вверх/вниз — символ, OK/вправо — добавить, влево — стереть, удержание OK — готово."""
+    """▲/▼ — символ, • — добавить, ▲+▼ — стереть, удержание • — готово."""
     chars = config.PIN_CHARS
     entered = []
     cur = 0
@@ -317,19 +330,19 @@ def pin_entry(title, lock_screen=True):
         shown = "*" * len(entered)
         if len(entered) < config.PIN_MAX_LEN:
             shown += "[" + chars[cur] + "]"
-        hint = "удерж. OK — готово" if len(entered) >= config.PIN_MIN_LEN \
+        hint = "удерж. • — готово" if len(entered) >= config.PIN_MIN_LEN \
             else "минимум %d симв." % config.PIN_MIN_LEN
-        screen([title, "", " " + shown, "", hint])
+        screen([title, "", " " + shown, "▲+▼ — стереть", hint])
         ev = wait_event(lock_screen=lock_screen)
         if ev == "U":
             cur = (cur + 1) % len(chars)
         elif ev == "D":
             cur = (cur - 1) % len(chars)
-        elif ev in ("OK", "R"):
+        elif ev == "OK":
             if len(entered) < config.PIN_MAX_LEN:
                 entered.append(chars[cur])
                 cur = 0
-        elif ev == "L":
+        elif ev == "BOTH":
             if entered:
                 entered.pop()
         elif ev == "LONG":
@@ -355,7 +368,7 @@ remote = Remote(vault, confirm, Locked, _gen)
 
 # ===================== Сценарии =====================
 def setup_new():
-    message(["Хранилища нет.", "Создадим новое.", "Удержание OK —", "конец ввода PIN."])
+    message(["Хранилища нет.", "Создадим новое.", "Удержание • —", "конец ввода PIN."])
     pin = new_pin()
     busy("Создаю...")
     vault.create(pin)
@@ -440,8 +453,8 @@ def browse():
         items = names + ["[Заблокировать]", "[Сменить PIN]"]
         title = "Пароли (%d)" % len(names)
         idx = menu(title, items, idx)
-        if idx is None:
-            continue
+        if idx is None:      # удержание • в главном списке — заблокировать
+            raise Locked()
         if idx < len(names):
             entry_menu(idx)
         elif idx == len(names):

@@ -10,14 +10,10 @@ DISPLAY_W = 128
 DISPLAY_H = 64
 FONT_FILE = "/fonts/cozette_ru.bdf"
 
-# --- Джойстик (KY-023 и аналоги) ---
-JOY_X = board.GP26           # VRx -> ADC0
-JOY_Y = board.GP27           # VRy -> ADC1
-JOY_SW = board.GP14          # SW  -> кнопка (на землю, внутренняя подтяжка)
-JOY_SWAP_XY = False          # если вверх/вниз и влево/вправо перепутаны
-JOY_INVERT_X = False         # если влево/вправо наоборот
-JOY_INVERT_Y = False         # если вверх/вниз наоборот
-JOY_THRESHOLD = 18000        # мёртвая зона (из 32768)
+# --- Кнопки (тактовые, вторым выводом на GND; подтяжка внутренняя) ---
+BTN_UP = board.GP13          # ▲
+BTN_OK = board.GP14          # •  (зажать при подключении USB — режим обслуживания)
+BTN_DOWN = board.GP15        # ▼
 
 # --- PIN ---
 PIN_CHARS = "0123456789"     # можно добавить буквы: "0123456789ABCDEF"
