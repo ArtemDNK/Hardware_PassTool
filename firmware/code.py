@@ -1,10 +1,11 @@
 # Hardware PassTool — DIY аппаратный менеджер паролей на RP2040 (аналог Mooltipass Mini).
-# Экран SSD1306/SH1106 128x64 I2C + три тактовые кнопки: ▲, ▼ и • (OK).
+# Модуль 1.3" OLED SH1106 (I2C) + энкодер EC11 с кнопкой + кнопки CONFIRM и BACK.
 # Устройство притворяется USB-клавиатурой и печатает логин/пароль,
 # а через отдельный COM-порт им можно управлять с ПК или телефона.
 import time
 import busio
 import digitalio
+import rotaryio
 import displayio
 import storage
 import supervisor
@@ -127,79 +128,80 @@ class Refresh(Exception):
     pass
 
 
-class Buttons:
-    """Три кнопки на землю (внутренняя подтяжка). События:
-    U / D   — нажатие ▲ / ▼ (при удержании — автоповтор)
-    OK      — короткое нажатие •
-    LONG    — удержание • (назад; в PIN — готово)
-    BOTH    — ▲ и ▼ вместе (блокировка; в PIN — стереть символ)
-    """
-    LONG = 0.8
-    REPEAT_DELAY = 0.45
-    REPEAT_RATE = 0.12
+class _Key:
+    """Кнопка на землю с антидребезгом и определением удержания."""
     DEBOUNCE = 0.02
 
-    def __init__(self):
-        self.io = {}
-        for name, pin in (("U", config.BTN_UP), ("D", config.BTN_DOWN), ("OK", config.BTN_OK)):
-            b = digitalio.DigitalInOut(pin)
-            b.switch_to_input(pull=digitalio.Pull.UP)
-            self.io[name] = b
-        self.raw = {n: False for n in self.io}         # последнее сырое значение
-        self.raw_t = {n: 0.0 for n in self.io}         # когда оно поменялось
-        self.state = {n: False for n in self.io}       # состояние после антидребезга
-        self.ok_t = 0.0
+    def __init__(self, pin):
+        self.io = digitalio.DigitalInOut(pin)
+        self.io.switch_to_input(pull=digitalio.Pull.UP)
+        self.raw = False
+        self.raw_t = 0.0
+        self.state = False
+        self.down_t = 0.0
         self.long_sent = False
-        self.rep_t = 0.0
-        self.repeating = False
-        self.chord = False
 
-    def _read(self, now):
-        cur = {}
-        for n, b in self.io.items():
-            v = not b.value
-            if v != self.raw[n]:
-                self.raw[n], self.raw_t[n] = v, now
-            cur[n] = self.raw[n] if now - self.raw_t[n] >= self.DEBOUNCE else self.state[n]
-        return cur
+    def poll(self, now, long_time):
+        """Возвращает "short", "long" или None."""
+        v = not self.io.value
+        if v != self.raw:
+            self.raw, self.raw_t = v, now
+        if now - self.raw_t < self.DEBOUNCE or self.raw == self.state:
+            if self.state and not self.long_sent and now - self.down_t >= long_time:
+                self.long_sent = True
+                return "long"
+            return None
+        self.state = self.raw
+        if self.state:
+            self.down_t, self.long_sent = now, False
+            return None
+        return None if self.long_sent else "short"
+
+
+class Controls:
+    """Энкодер EC11 + кнопки. События:
+    U / D     — поворот против / по часовой (по одному на щелчок)
+    OK        — короткое нажатие CONFIRM или энкодера
+    LONG      — удержание CONFIRM или энкодера (в PIN — готово)
+    BACK      — короткое нажатие BACK (назад; в PIN — стереть символ)
+    BACKLONG  — удержание BACK (заблокировать)
+    """
+    LONG = 0.8
+
+    def __init__(self):
+        self.enc = rotaryio.IncrementalEncoder(config.ENC_A, config.ENC_B,
+                                               divisor=config.ENC_DIVISOR)
+        self.last_pos = self.enc.position
+        self.pending = 0
+        self.ok = [_Key(config.BTN_CONFIRM), _Key(config.ENC_PUSH)]
+        self.back = _Key(config.BTN_BACK)
 
     def poll(self):
         now = time.monotonic()
-        cur = self._read(now)
-        prev = self.state
-        self.state = cur
-        # ▲+▼ вместе
-        if cur["U"] and cur["D"]:
-            if not self.chord:
-                self.chord = True
-                return "BOTH"
-            return None
-        if self.chord:
-            if not cur["U"] and not cur["D"]:
-                self.chord = False
-            return None
-        # ▲ / ▼ с автоповтором
-        for n in ("U", "D"):
-            if cur[n] and not prev[n]:
-                self.rep_t, self.repeating = now, False
-                return n
-            if cur[n]:
-                wait = self.REPEAT_RATE if self.repeating else self.REPEAT_DELAY
-                if now - self.rep_t >= wait:
-                    self.rep_t, self.repeating = now, True
-                    return n
-        # • короткое / долгое
-        if cur["OK"] and not prev["OK"]:
-            self.ok_t, self.long_sent = now, False
-        elif cur["OK"] and not self.long_sent and now - self.ok_t >= self.LONG:
-            self.long_sent = True
-            return "LONG"
-        elif not cur["OK"] and prev["OK"] and not self.long_sent:
-            return "OK"
+        pos = self.enc.position
+        if pos != self.last_pos:
+            self.pending += pos - self.last_pos
+            self.last_pos = pos
+        ev = None
+        for k in self.ok:
+            r = k.poll(now, self.LONG)
+            if r and not ev:
+                ev = "OK" if r == "short" else "LONG"
+        r = self.back.poll(now, self.LONG)
+        if r and not ev:
+            ev = "BACK" if r == "short" else "BACKLONG"
+        if ev:
+            return ev
+        if self.pending:
+            step = 1 if self.pending > 0 else -1
+            self.pending -= step
+            if config.ENC_REVERSE:
+                step = -step
+            return "D" if step > 0 else "U"
         return None
 
 
-buttons = Buttons()
+controls = Controls()
 vault = Vault(config.KDF_ITERATIONS)
 _last_activity = time.monotonic()
 
@@ -221,7 +223,7 @@ def wait_event(lock_screen=False):
             if remote.changed:
                 remote.changed = False
                 raise Refresh()
-        ev = buttons.poll()
+        ev = controls.poll()
         now = time.monotonic()
         if ev:
             _last_activity = now
@@ -275,7 +277,7 @@ def message(lines):
         rows.append("")
     rows.append("         [OK]")
     screen(rows)
-    while wait_event() not in ("OK", "LONG"):
+    while wait_event() not in ("OK", "LONG", "BACK"):
         pass
 
 
@@ -291,13 +293,13 @@ def confirm(question):
             idx ^= 1
         elif ev == "OK":
             return idx == 0
-        elif ev == "LONG":
+        elif ev == "BACK":
             return False
 
 
 def menu(title, items, idx=0):
-    """Возвращает индекс выбранного пункта или None (удержание • — назад).
-    ▲+▼ вместе — блокировка."""
+    """Возвращает индекс выбранного пункта или None (BACK — назад).
+    Удержание BACK — блокировка."""
     if not items:
         return None
     view = ROWS - 1
@@ -315,14 +317,14 @@ def menu(title, items, idx=0):
             idx += 1
         elif ev == "OK":
             return idx
-        elif ev == "LONG":
+        elif ev == "BACK":
             return None
-        elif ev == "BOTH" and vault.unlocked:
+        elif ev == "BACKLONG" and vault.unlocked:
             raise Locked()
 
 
 def pin_entry(title, lock_screen=True):
-    """▲/▼ — символ, • — добавить, ▲+▼ — стереть, удержание • — готово."""
+    """Энкодер — символ, OK — добавить, BACK — стереть, удержание OK — готово."""
     chars = config.PIN_CHARS
     entered = []
     cur = 0
@@ -330,19 +332,19 @@ def pin_entry(title, lock_screen=True):
         shown = "*" * len(entered)
         if len(entered) < config.PIN_MAX_LEN:
             shown += "[" + chars[cur] + "]"
-        hint = "удерж. • — готово" if len(entered) >= config.PIN_MIN_LEN \
+        hint = "удерж. OK — готово" if len(entered) >= config.PIN_MIN_LEN \
             else "минимум %d симв." % config.PIN_MIN_LEN
-        screen([title, "", " " + shown, "▲+▼ — стереть", hint])
+        screen([title, "", " " + shown, "BACK — стереть", hint])
         ev = wait_event(lock_screen=lock_screen)
-        if ev == "U":
+        if ev == "D":
             cur = (cur + 1) % len(chars)
-        elif ev == "D":
+        elif ev == "U":
             cur = (cur - 1) % len(chars)
         elif ev == "OK":
             if len(entered) < config.PIN_MAX_LEN:
                 entered.append(chars[cur])
                 cur = 0
-        elif ev == "BOTH":
+        elif ev == "BACK":
             if entered:
                 entered.pop()
         elif ev == "LONG":
@@ -368,7 +370,7 @@ remote = Remote(vault, confirm, Locked, _gen)
 
 # ===================== Сценарии =====================
 def setup_new():
-    message(["Хранилища нет.", "Создадим новое.", "Удержание • —", "конец ввода PIN."])
+    message(["Хранилища нет.", "Создадим новое.", "Удержание OK —", "конец ввода PIN."])
     pin = new_pin()
     busy("Создаю...")
     vault.create(pin)
@@ -452,9 +454,10 @@ def browse():
         names = vault.names()
         items = names + ["[Заблокировать]", "[Сменить PIN]"]
         title = "Пароли (%d)" % len(names)
-        idx = menu(title, items, idx)
-        if idx is None:      # удержание • в главном списке — заблокировать
-            raise Locked()
+        sel = menu(title, items, idx)
+        if sel is None:      # BACK в главном списке — некуда возвращаться
+            continue
+        idx = sel
         if idx < len(names):
             entry_menu(idx)
         elif idx == len(names):

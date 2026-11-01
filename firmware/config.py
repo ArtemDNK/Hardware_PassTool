@@ -5,15 +5,20 @@ import board
 I2C_SDA = board.GP4
 I2C_SCL = board.GP5
 DISPLAY_ADDR = 0x3C          # иногда 0x3D
-DISPLAY_DRIVER = "ssd1306"   # "ssd1306" (0.96") или "sh1106" (1.3")
+DISPLAY_DRIVER = "sh1106"    # "sh1106" (1.3") или "ssd1306" (0.96")
 DISPLAY_W = 128
 DISPLAY_H = 64
 FONT_FILE = "/fonts/cozette_ru.bdf"
 
-# --- Кнопки (тактовые, вторым выводом на GND; подтяжка внутренняя) ---
-BTN_UP = board.GP13          # ▲
-BTN_OK = board.GP14          # •  (зажать при подключении USB — режим обслуживания)
-BTN_DOWN = board.GP15        # ▼
+# --- Энкодер EC11 и кнопки (модуль OLED 1.3" + EC11) ---
+# ENC_A и ENC_B на RP2040 должны быть соседними пинами (GPn и GPn+1).
+ENC_A = board.GP10           # TRA
+ENC_B = board.GP11           # TRB
+ENC_DIVISOR = 4              # переходов на щелчок: если щелчок листает на 2 пункта — 2→4, если через раз — 4→2
+ENC_REVERSE = False          # если по часовой листает вверх
+ENC_PUSH = board.GP12        # PSH — нажатие энкодера (= CONFIRM)
+BTN_CONFIRM = board.GP13     # CON (зажать при подключении USB — режим обслуживания)
+BTN_BACK = board.GP14        # BAK
 
 # --- PIN ---
 PIN_CHARS = "0123456789"     # можно добавить буквы: "0123456789ABCDEF"
